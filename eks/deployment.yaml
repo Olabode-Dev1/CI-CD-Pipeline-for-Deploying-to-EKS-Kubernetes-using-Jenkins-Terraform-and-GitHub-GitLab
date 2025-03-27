@@ -1,39 +1,24 @@
-# kubernetes/deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: my-app
+  name: nodejs-app
 spec:
-  replicas: 3
+  replicas: 2
   selector:
     matchLabels:
-      app: my-app
+      app: nodejs-app
   template:
     metadata:
       labels:
-        app: my-app
+        app: nodejs-app
     spec:
       containers:
-      - name: my-app
-        image: your-docker-registry/my-app:${BUILD_NUMBER}
+      - name: nodejs-app
+        image: YOUR_ECR_REGISTRY/nodejs-app:BUILD_NUMBER  # Will be replaced by Jenkins
         ports:
-        - containerPort: 8080
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "128Mi"
-          limits:
-            cpu: "500m"
-            memory: "512Mi"
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
-        readinessProbe:
-          httpGet:
-            path: /health
-            port: 8080
-          initialDelaySeconds: 5
-          periodSeconds: 10
+        - containerPort: 3000
+        env:
+        - name: BUILD_NUMBER
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.annotations['buildNumber']
