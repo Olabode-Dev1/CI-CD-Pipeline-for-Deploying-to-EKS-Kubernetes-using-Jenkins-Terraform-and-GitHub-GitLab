@@ -1,122 +1,74 @@
-// Jenkinsfile
-
 pipeline {
     agent any
     
+    // --- ENVIRONMENT VARIABLES (EDIT THESE) ---
     environment {
-        AWS_ACCESS_KEY_ID     = credentials('AWS_ACCESS_KEY_ID')
-        AWS_SECRET_ACCESS_KEY = credentials('AWS_SECRET_ACCESS_KEY')
-        AWS_REGION            = 'us-west-2'
-        CLUSTER_NAME          = 'my-eks-cluster'
-        DOCKER_REGISTRY       = 'your-docker-registry'
-        APP_NAME              = 'my-app'
-        TERRAFORM_DIR         = 'infrastructure'
-        KUBE_CONFIG           = credentials('kube-config')
+        // AWS Region where EKS lives
+        AWS_REGION = 'us-west-2'  // EDIT: Your EKS region (e.g., 'eu-central-1')
+        
+        // Name of your EKS cluster
+        EKS_CLUSTER = 'my-eks-cluster'  // EDIT: Get this from `aws eks list-clusters`
+        
+        // Docker registry path (ECR or Docker Hub)
+        DOCKER_REGISTRY = '123456789012.dkr.ecr.us-west-2.amazonaws.com'  // EDIT: Your ECR repo URL
+        APP_NAME = 'my-app'  // EDIT: Your application name
     }
     
     stages {
+        // --- STAGE 1: Checkout Code ---
         stage('Checkout') {
             steps {
-                checkout scm
+                git branch: 'main',  // EDIT: Your Git branch (e.g., 'dev', 'production')
+                      url: 'https://github.com/your-username/your-repo.git'  // EDIT: Your repo URL
             }
         }
         
-        stage('Terraform Init') {
-            when {
-                branch 'main'
-            }
-            steps {
-                dir(env.TERRAFORM_DIR) {
-                    sh 'terraform init'
-                }
-            }
-        }
-        
-        stage('Terraform Plan') {
-            when {
-                branch 'main'
-            }
-            steps {
-                dir(env.TERRAFORM_DIR) {
-                    sh 'terraform plan -out=tfplan'
-                }
-            }
-        }
-        
-        stage('Terraform Apply') {
-            when {
-                branch 'main'
-            }
-            steps {
-                dir(env.TERRAFORM_DIR) {
-                    sh 'terraform apply -auto-approve tfplan'
-                }
-            }
-        }
-        
-        stage('Configure kubectl') {
+        // --- STAGE 2: Build Docker Image ---
+        stage('Build') {
             steps {
                 script {
-                    // Update kubeconfig with the newly created cluster
-                    sh """
-                    aws eks --region ${AWS_REGION} update-kubeconfig --name ${CLUSTER_NAME}
-                    kubectl config use-context arn:aws:eks:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${CLUSTER_NAME}
-                    """
+                    // Builds image with tag like: 123456789012.dkr.ecr.us-west-2.amazonaws.com/my-app:42
+                    docker.build("${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_NUMBER}")
                 }
             }
         }
         
-        stage('Build Docker Image') {
+        // --- STAGE 3: Push to Container Registry ---
+        stage('Push to ECR') {
             steps {
                 script {
-                    docker.build("${DOCKER_REGISTRY}/${APP_NAME}:${env.BUILD_NUMBER}")
-                }
-            }
-        }
-        
-        stage('Push Docker Image') {
-            steps {
-                script {
-                    docker.withRegistry('https://${DOCKER_REGISTRY}', 'docker-registry-cred') {
-                        docker.image("${DOCKER_REGISTRY}/${APP_NAME}:${env.BUILD_NUMBER}").push()
+                    // Uses Jenkins credentials ID 'ecr-credentials' (set this up in Jenkins)
+                    docker.withRegistry("https://${DOCKER_REGISTRY}", 'ecr-credentials') {
+                        docker.image("${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_NUMBER}").push()
                     }
                 }
             }
         }
         
+        // --- STAGE 4: Deploy to EKS ---
         stage('Deploy to EKS') {
             steps {
                 script {
-                    // Apply Kubernetes manifests
-                    sh "kubectl apply -f kubernetes/deployment.yaml"
-                    sh "kubectl apply -f kubernetes/service.yaml"
-                    
-                    // Check rollout status
-                    sh "kubectl rollout status deployment/${APP_NAME}"
-                }
-            }
-        }
-        
-        stage('Smoke Test') {
-            steps {
-                script {
-                    // Simple smoke test to verify deployment
-                    def serviceUrl = sh(script: "kubectl get service ${APP_NAME} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'", returnStdout: true).trim()
-                    sh "curl -sSf http://${serviceUrl}/health"
+                    // Authenticates kubectl with EKS
+                    sh """
+                    aws eks --region ${AWS_REGION} update-kubeconfig --name ${EKS_CLUSTER}
+                    kubectl set image deployment/${APP_NAME} ${APP_NAME}=${DOCKER_REGISTRY}/${APP_NAME}:${BUILD_NUMBER} -n default
+                    kubectl rollout status deployment/${APP_NAME} -n default
+                    """
                 }
             }
         }
     }
     
+    // --- POST-BUILD ACTIONS ---
     post {
-        always {
-            cleanWs()
-        }
         failure {
-            slackSend channel: '#ci-cd', message: "Build ${env.JOB_NAME} #${env.BUILD_NUMBER} failed"
+            slackSend channel: '#ci-alerts',  // EDIT: Your Slack channel
+                     message: "FAILED: Job '${env.JOB_NAME}' (Build ${env.BUILD_NUMBER})"
         }
         success {
-            slackSend channel: '#ci-cd', message: "Build ${env.JOB_NAME} #${env.BUILD_NUMBER} succeeded"
+            slackSend channel: '#ci-alerts',
+                     message: "SUCCESS: Job '${env.JOB_NAME}' (Build ${env.BUILD_NUMBER})"
         }
     }
 }
