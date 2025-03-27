@@ -1,0 +1,11 @@
+{
+  "name": "eks-demo-app",
+  "version": "1.0.0",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "http": "0.0.1-security"
+  }
+}
